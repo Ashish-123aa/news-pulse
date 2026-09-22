@@ -1,0 +1,7 @@
+frontend
+data
+node_modules
+.next
+.git
+.env
+*.md
