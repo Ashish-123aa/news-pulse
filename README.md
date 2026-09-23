@@ -3,6 +3,11 @@
 A small system that pulls live articles from RSS feeds, groups related articles into topic
 clusters, and displays them as a visual timeline.
 
+## Live Demo
+
+- Frontend: https://news-pulse-pearl.vercel.app
+- Backend API: https://news-pulse-g6u5.onrender.com
+
 ```
 /scraper   Python — RSS ingestion, article extraction, keyword-overlap clustering
 /backend   Node.js/Express — REST API over the shared SQLite DB (node:sqlite, Node's built-in driver)
@@ -99,6 +104,24 @@ doesn't lose "which cluster was this" between refreshes.
 | `POST /ingest/trigger` | runs the scraper as a subprocess, returns `{ jobId }` |
 | `GET /ingest/status/:jobId` | poll job status: `running` / `completed` / `failed` |
 
+## Scheduled ingestion (optional)
+
+`.github/workflows/scheduled-ingest.yml` calls `POST /ingest/trigger` on the deployed
+backend every 30 minutes via GitHub Actions cron, then polls `/ingest/status/:jobId` until
+it completes or fails — so the timeline stays current without anyone clicking "Refresh data"
+manually. This is separate from, and doesn't replace, the manual refresh button.
+
+**Setup** (only needed once the backend is deployed):
+1. GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**
+2. Name: `BACKEND_URL`, value: your deployed backend URL with no trailing slash
+   (e.g. `https://news-pulse-g6u5.onrender.com`)
+3. That's it — the workflow runs automatically on schedule. To test it immediately instead
+   of waiting up to 30 minutes: **Actions tab → Scheduled news ingest → Run workflow**.
+
+**Note on Render's free tier:** if the backend spins down from inactivity, this scheduled
+job effectively also keeps it warm every 30 minutes (each cron run wakes it via the
+ingest-trigger request). On a paid tier this isn't a concern either way.
+
 ## Stretch goals implemented
 
 - **Auto-refresh** — the frontend re-polls `/timeline` every 30s in the background (toggle:
@@ -122,7 +145,16 @@ doesn't lose "which cluster was this" between refreshes.
 |---|---|---|
 | Frontend | Vercel | set `NEXT_PUBLIC_API_URL` to the deployed backend URL |
 | Backend + scraper | Render/Railway, **Docker deploy** using the root `Dockerfile` | bundles Node + Python in one image so `/ingest/trigger` can spawn the scraper subprocess reliably |
-| Database | SQLite file on a persistent disk mounted at `/data` (Render/Railway persistent volume). For a true multi-instance deploy, swap for hosted Postgres — the schema translates directly |
+| Database | SQLite file inside the container (see note below on Render's free tier) |
+
+**Note on storage persistence:** Render's free-tier web services don't support persistent
+disks (that's a paid-tier feature). The live deployment above therefore uses ephemeral
+storage — the SQLite file resets on redeploy or when the free instance spins down from
+inactivity. This is a deliberate tradeoff for this assessment (correctness and a working
+live demo over production-grade persistence on a 3-day deadline), not an oversight. For a
+real deployment, the fix is either a Render paid tier with a persistent disk, or swapping to
+Render's free Postgres tier — the schema translates directly, it would just need the DB
+driver swapped in both `scraper/` and `backend/`.
 
 ### Backend (Docker deploy — Render example)
 1. Push the repo to GitHub.
@@ -130,17 +162,16 @@ doesn't lose "which cluster was this" between refreshes.
 3. Set **Runtime** to **Docker**. Leave **Root Directory** blank (repo root) and
    **Dockerfile Path** as `Dockerfile` — the build needs access to both `backend/` and
    `scraper/`, so the build context must be the repo root, not `backend/`.
-4. Add a **persistent disk**, mount path `/data`.
-5. Environment variables (the Dockerfile already sets sane defaults, override only if needed):
-   ```
-   DB_PATH=/data/newspulse.db
-   ```
-6. Deploy. Test `POST /ingest/trigger` on the live URL early — this is the step most likely
+4. Environment variables (the Dockerfile already sets sane defaults, override only if needed):
+```
+   DB_PATH=/app/data/newspulse.db
+```
+5. Deploy. Test `POST /ingest/trigger` on the live URL early — this is the step most likely
    to break if Python/Node aren't both present, and the Docker image is what guarantees they
    are.
 
-Railway: same idea — "Deploy from Dockerfile", root repo as build context, persistent volume
-mounted at `/data`, same env var.
+Railway: same idea — "Deploy from Dockerfile", root repo as build context, same env var. If
+using a paid tier with a persistent volume, mount it at `/data` and set `DB_PATH` to match.
 
 ### Frontend (Vercel)
 1. Vercel → **New Project** → import the repo → set **Root Directory** to `frontend`.
